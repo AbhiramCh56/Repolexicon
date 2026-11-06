@@ -23,7 +23,11 @@ class ConfigTest(unittest.TestCase):
 
     def test_ingestion_knobs_are_configurable(self):
         for name in (
+            "EMBEDDING_BACKEND",
             "EMBEDDING_MODEL",
+            "GEMINI_EMBEDDING_MODEL",
+            "GEMINI_EMBEDDING_DIMENSIONS",
+            "HF_INFERENCE_PROVIDER",
             "EMBEDDING_BATCH_SIZE",
             "CHUNK_SIZE_CHARS",
             "MAX_FILE_SIZE_BYTES",

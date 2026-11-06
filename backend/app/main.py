@@ -26,8 +26,8 @@ async def lifespan(app: FastAPI):
             "that proxy and a few failed logins lock out all users. Set it to "
             "the platform's client-IP header (cf-connecting-ip on Render)."
         )
-    # Overlap the ~7s model load with login instead of blocking startup or
-    # making the first question wait.
+    # Overlap local model load (or cloud client setup) with login instead of
+    # blocking startup or making the first question wait.
     warm_embedding_model_in_background()
     yield
 

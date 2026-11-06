@@ -1,5 +1,6 @@
 import unittest
 import uuid
+from types import SimpleNamespace
 from unittest import mock
 
 from app.models.chunk import Chunk
@@ -33,6 +34,182 @@ class CollectionNamingTest(unittest.TestCase):
 
     def test_rag_service_shares_the_single_implementation(self):
         self.assertIs(rag_service.get_collection_name, embedding_service.get_collection_name)
+
+
+class FakeGeminiModels:
+    def __init__(self):
+        self.calls = []
+
+    def embed_content(self, *, model, contents, config):
+        self.calls.append(
+            SimpleNamespace(model=model, contents=contents, config=config)
+        )
+        count = len(contents) if isinstance(contents, list) else 1
+        return SimpleNamespace(
+            embeddings=[
+                SimpleNamespace(values=[3.0, 4.0]) for _ in range(count)
+            ]
+        )
+
+
+class FakeGeminiClient:
+    def __init__(self):
+        self.models = FakeGeminiModels()
+
+
+class GeminiEmbeddingsTest(unittest.TestCase):
+    def _make(self, model):
+        client = FakeGeminiClient()
+        with mock.patch.object(
+            embedding_service.genai, "Client", return_value=client
+        ):
+            embedder = embedding_service._GeminiEmbeddings(
+                model=model,
+                api_key="test-key",
+                output_dimensionality=2,
+            )
+        return embedder, client
+
+    def test_embedding_2_prefixes_documents_and_returns_one_vector_each(self):
+        embedder, client = self._make("gemini-embedding-2")
+
+        vectors = embedder.embed_documents(["alpha", "beta"])
+
+        self.assertEqual(vectors, [[0.6, 0.8], [0.6, 0.8]])
+        call = client.models.calls[0]
+        self.assertEqual(len(call.contents), 2)
+        self.assertEqual(call.contents[0].parts[0].text, "title: none | text: alpha")
+        self.assertIsNone(call.config.task_type)
+        self.assertEqual(call.config.output_dimensionality, 2)
+
+    def test_embedding_2_query_uses_the_retrieval_instruction(self):
+        embedder, client = self._make("gemini-embedding-2")
+
+        embedder.embed_query("where is auth")
+
+        self.assertEqual(
+            client.models.calls[0].contents,
+            "task: code retrieval | query: where is auth",
+        )
+        self.assertIsNone(client.models.calls[0].config.task_type)
+
+    def test_embedding_001_uses_the_task_type_fields(self):
+        embedder, client = self._make("gemini-embedding-001")
+
+        embedder.embed_documents(["alpha"])
+        embedder.embed_query("where is auth")
+
+        self.assertEqual(
+            client.models.calls[0].contents[0].parts[0].text, "alpha"
+        )
+        self.assertEqual(
+            client.models.calls[0].config.task_type, "RETRIEVAL_DOCUMENT"
+        )
+        self.assertEqual(client.models.calls[1].contents, "where is auth")
+        self.assertEqual(
+            client.models.calls[1].config.task_type, "CODE_RETRIEVAL_QUERY"
+        )
+
+    def test_empty_document_list_makes_no_request(self):
+        embedder, client = self._make("gemini-embedding-2")
+
+        self.assertEqual(embedder.embed_documents([]), [])
+        self.assertEqual(client.models.calls, [])
+
+    def test_gemini_batches_respect_the_item_limit(self):
+        batches = embedding_service._gemini_batches(["chunk"] * 101)
+
+        self.assertEqual([len(batch) for batch in batches], [100, 1])
+
+
+class EmbeddingBackendTest(unittest.TestCase):
+    def test_gemini_backend_builds_gemini_embeddings(self):
+        with mock.patch.object(
+            embedding_service.settings, "EMBEDDING_BACKEND", "gemini"
+        ), mock.patch.object(
+            embedding_service.settings, "GEMINI_API_KEY", "test-key"
+        ), mock.patch.object(
+            embedding_service.settings, "GEMINI_EMBEDDING_MODEL", "gemini-embedding-2"
+        ), mock.patch.object(
+            embedding_service.settings, "GEMINI_EMBEDDING_DIMENSIONS", 1536
+        ), mock.patch.object(
+            embedding_service, "_GeminiEmbeddings"
+        ) as gemini_cls:
+            sentinel = object()
+            gemini_cls.return_value = sentinel
+
+            result = embedding_service._build_embedding_function()
+
+        self.assertIs(result, sentinel)
+        gemini_cls.assert_called_once_with(
+            model="gemini-embedding-2",
+            api_key="test-key",
+            output_dimensionality=1536,
+        )
+
+    def test_gemini_backend_requires_a_key(self):
+        with mock.patch.object(
+            embedding_service.settings, "EMBEDDING_BACKEND", "gemini"
+        ), mock.patch.object(
+            embedding_service.settings, "GEMINI_API_KEY", None
+        ):
+            with self.assertRaisesRegex(ValueError, "GEMINI_API_KEY"):
+                embedding_service._build_embedding_function()
+
+    def test_huggingface_backend_uses_the_inference_api(self):
+        with mock.patch.object(embedding_service.settings, "EMBEDDING_BACKEND", "huggingface"), \
+             mock.patch.object(embedding_service.settings, "HF_TOKEN", "hf_test_token"), \
+             mock.patch.object(
+                 embedding_service.settings,
+                 "EMBEDDING_MODEL",
+                 "sentence-transformers/all-MiniLM-L6-v2",
+             ), \
+             mock.patch.object(
+                 embedding_service.settings, "HF_INFERENCE_PROVIDER", "hf-inference"
+             ), \
+             mock.patch.object(
+                 embedding_service, "HuggingFaceEndpointEmbeddings"
+             ) as endpoint_cls:
+            sentinel = object()
+            endpoint_cls.return_value = sentinel
+
+            result = embedding_service._build_embedding_function()
+
+        self.assertIs(result, sentinel)
+        endpoint_cls.assert_called_once_with(
+            model="sentence-transformers/all-MiniLM-L6-v2",
+            task="feature-extraction",
+            provider="hf-inference",
+            huggingfacehub_api_token="hf_test_token",
+            model_kwargs={"truncate": True, "normalize": True},
+        )
+
+    def test_huggingface_backend_requires_a_token(self):
+        with mock.patch.object(embedding_service.settings, "EMBEDDING_BACKEND", "huggingface"), \
+             mock.patch.object(embedding_service.settings, "HF_TOKEN", None):
+            with self.assertRaisesRegex(ValueError, "HF_TOKEN"):
+                embedding_service._build_embedding_function()
+
+    def test_local_backend_loads_the_model_in_process(self):
+        with mock.patch.object(embedding_service.settings, "EMBEDDING_BACKEND", "local"), \
+             mock.patch.object(
+                 embedding_service.settings, "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+             ), \
+             mock.patch.object(embedding_service, "HuggingFaceEmbeddings") as local_cls:
+            sentinel = object()
+            local_cls.return_value = sentinel
+
+            result = embedding_service._build_embedding_function()
+
+        self.assertIs(result, sentinel)
+        local_cls.assert_called_once_with(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
+
+    def test_unknown_backend_is_rejected(self):
+        with mock.patch.object(embedding_service.settings, "EMBEDDING_BACKEND", "wat"):
+            with self.assertRaisesRegex(ValueError, "EMBEDDING_BACKEND"):
+                embedding_service._build_embedding_function()
 
 
 class DeleteCollectionTest(unittest.TestCase):
@@ -119,6 +296,57 @@ class EmbedRepositoryChunksTest(unittest.TestCase):
         self.assertTrue(result.complete)
         self.assertEqual(result.embedded, 2)
         self.assertEqual(embedder.calls, 2)
+
+    def test_retry_delay_is_parsed_from_the_gemini_error(self):
+        error = RuntimeError(
+            "429 RESOURCE_EXHAUSTED ... 'retryDelay': '12s' ... Please retry in 11.8s."
+        )
+
+        self.assertEqual(embedding_service._retry_delay_seconds(error, 1), 13.0)
+
+    def test_retry_delay_falls_back_to_capped_exponential_backoff(self):
+        error = RuntimeError("temporary failure")
+
+        self.assertEqual(embedding_service._retry_delay_seconds(error, 1), 2.0)
+        self.assertEqual(embedding_service._retry_delay_seconds(error, 3), 8.0)
+        self.assertEqual(embedding_service._retry_delay_seconds(error, 10), 60.0)
+
+    def test_rate_limited_batch_waits_for_the_server_and_eventually_succeeds(self):
+        class RateLimitedThenOk(FakeEmbedder):
+            def __init__(self):
+                super().__init__()
+                self.attempts = 0
+
+            def embed_documents(self, documents):
+                self.attempts += 1
+                if self.attempts < 3:
+                    raise RuntimeError(
+                        "429 RESOURCE_EXHAUSTED 'retryDelay': '12s'"
+                    )
+                return super().embed_documents(documents)
+
+        embedder = RateLimitedThenOk()
+        with mock.patch.object(embedding_service.settings, "EMBEDDING_BATCH_SIZE", 10), \
+             mock.patch.object(embedding_service.time, "sleep") as sleep:
+            result, _, _ = self._run(_rows(2), embedder=embedder)
+
+        self.assertTrue(result.complete)
+        self.assertEqual(embedder.attempts, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [13.0, 13.0])
+
+    def test_retryable_batches_use_more_attempts_than_plain_errors(self):
+        class AlwaysRateLimited(FakeEmbedder):
+            def embed_documents(self, documents):
+                self.calls += 1
+                raise RuntimeError("429 RESOURCE_EXHAUSTED 'retryDelay': '1s'")
+
+        embedder = AlwaysRateLimited()
+        with mock.patch.object(embedding_service.settings, "EMBEDDING_BATCH_SIZE", 10), \
+             mock.patch.object(embedding_service.time, "sleep"):
+            result, _, _ = self._run(_rows(2), embedder=embedder)
+
+        self.assertFalse(result.complete)
+        self.assertEqual(embedder.calls, embedding_service._RETRYABLE_ATTEMPTS)
 
     def test_permanent_failure_fails_the_run(self):
         class AlwaysFails(FakeEmbedder):

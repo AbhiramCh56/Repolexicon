@@ -3,7 +3,7 @@ uvicorn[standard]
 sqlalchemy
 alembic
 psycopg2-binary
-pydantic
+pydantic[email]
 pydantic-settings
 
 pyjwt
@@ -13,6 +13,7 @@ GitPython
 pathspec
 chromadb
 langchain
+langchain-core
 langchain-community
 langchain-chroma
 sentence-transformers
@@ -20,6 +21,7 @@ langchain-openai
 langchain-nvidia-ai-endpoints
 langchain-groq
 langchain-huggingface
+google-genai
 
 tree-sitter
 tree-sitter-python

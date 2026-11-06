@@ -1,0 +1,11 @@
+# Development and test dependencies.
+#
+#     pip install -r requirements-dev.txt
+#
+# Runtime dependencies live in requirements.txt; this file only adds what the
+# test suite needs on top of them.
+
+-r requirements.txt
+
+# Required by fastapi.testclient.TestClient (starlette's test client).
+httpx

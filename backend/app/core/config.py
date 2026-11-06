@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     NVIDIA_API_KEY: str | None = None
     GROQ_API_KEY: str | None = None
 
+    # Embedding API keys (separate from the chat LLM; chat still uses Groq).
+    GEMINI_API_KEY: str | None = None
+    HF_TOKEN: str | None = None
+
     # Storage (defaults live under backend/.data so they are CWD-independent)
     CHROMA_STORAGE_DIR: str = str(BACKEND_ROOT / ".data" / "chroma")
     REPO_STORAGE_DIR: str = str(BACKEND_ROOT / ".data" / "repos")
@@ -70,7 +74,19 @@ class Settings(BaseSettings):
     MANIFEST_STORAGE_DIR: str = str(BACKEND_ROOT / ".data" / "manifests")
 
     # Parsing / embedding
-    EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
+    # "gemini" uses the Gemini Developer API (requires GEMINI_API_KEY),
+    # "huggingface" uses the Hugging Face Inference API (requires HF_TOKEN),
+    # and "local" loads the model in-process with sentence-transformers.
+    EMBEDDING_BACKEND: str = "gemini"
+    GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-2"
+    # Gemini supports 128-3072 dimensions. 1536 keeps storage reasonable while
+    # preserving most of the model's retrieval quality.
+    GEMINI_EMBEDDING_DIMENSIONS: int = 1536
+    # Model for the huggingface / local backends.
+    EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
+    # Inference provider on Hugging Face. hf-inference serves MiniLM; leave
+    # blank to let huggingface_hub pick automatically.
+    HF_INFERENCE_PROVIDER: str = "hf-inference"
     EMBEDDING_BATCH_SIZE: int = 100
     CHUNK_SIZE_CHARS: int = 1500
     MAX_FILE_SIZE_BYTES: int = 5 * 1024 * 1024
