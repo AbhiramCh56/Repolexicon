@@ -228,7 +228,13 @@ def _build_embedding_function() -> Embeddings:
 
     if backend == "local":
         logger.info("Loading local embedding model %s", settings.EMBEDDING_MODEL)
-        return HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
+        return HuggingFaceEmbeddings(
+            model_name=settings.EMBEDDING_MODEL,
+            model_kwargs={"device": "cpu"},
+            # Normalize so Chroma's L2 distance behaves like cosine similarity,
+            # matching the vectors produced by the cloud backends.
+            encode_kwargs={"normalize_embeddings": True},
+        )
 
     raise ValueError(
         f"Unsupported EMBEDDING_BACKEND '{backend}'. "

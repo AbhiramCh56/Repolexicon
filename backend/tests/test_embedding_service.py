@@ -203,7 +203,9 @@ class EmbeddingBackendTest(unittest.TestCase):
 
         self.assertIs(result, sentinel)
         local_cls.assert_called_once_with(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={"normalize_embeddings": True},
         )
 
     def test_unknown_backend_is_rejected(self):

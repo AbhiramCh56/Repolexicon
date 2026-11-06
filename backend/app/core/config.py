@@ -87,6 +87,8 @@ class Settings(BaseSettings):
     # Inference provider on Hugging Face. hf-inference serves MiniLM; leave
     # blank to let huggingface_hub pick automatically.
     HF_INFERENCE_PROVIDER: str = "hf-inference"
+    # Chunks per embedding request. Use a smaller value (e.g. 32) for local
+    # inference on memory-constrained machines.
     EMBEDDING_BATCH_SIZE: int = 100
     CHUNK_SIZE_CHARS: int = 1500
     MAX_FILE_SIZE_BYTES: int = 5 * 1024 * 1024
