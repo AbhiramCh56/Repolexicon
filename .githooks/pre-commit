@@ -1,5 +1,5 @@
 #!/bin/sh
-# RepoMind secret guard.
+# RepoLexicon secret guard.
 #
 # Enable once per clone:   git config core.hooksPath .githooks
 # Bypass for a false positive:   git commit --no-verify

@@ -7,7 +7,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "RepoMind AI"
+    PROJECT_NAME: str = "RepoLexicon"
 
     # Database
     DATABASE_URL: str

@@ -55,7 +55,7 @@ export default function AuthView({
             </div>
             <CardTitle className="text-2xl">
               <span>Repo</span>
-              <span className="text-primary">Mind</span>
+              <span className="text-primary">Lexicon</span>
             </CardTitle>
             <CardDescription>Sign in to your workspace</CardDescription>
           </CardHeader>

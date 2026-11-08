@@ -65,7 +65,7 @@ export default function LandingView({
           <BrandMark className="size-7 text-indigo-400" />
           <span className="text-lg font-semibold tracking-tight">
             <span className="text-white">Repo</span>
-            <span className="text-indigo-400">Mind</span>
+            <span className="text-indigo-400">Lexicon</span>
           </span>
         </div>
 
@@ -94,10 +94,10 @@ export default function LandingView({
         <section className="mx-auto max-w-4xl px-6 pt-8 text-center sm:pt-14">
           <h1 className="text-6xl font-bold tracking-tight sm:text-7xl md:text-8xl">
             <span className="text-white">Repo</span>
-            <span className="text-indigo-400">Mind</span>
+            <span className="text-indigo-400">Lexicon</span>
           </h1>
           <p className="mt-6 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-            See the bigger picture of any codebase.
+            The lexicon of your codebase.
           </p>
           <p className="mx-auto mt-5 max-w-2xl text-base text-white/60 sm:text-lg">
             Import a repository and instantly visualize its architecture,
@@ -202,9 +202,9 @@ export default function LandingView({
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 px-6 text-sm text-white/50 sm:flex-row">
           <div className="flex items-center gap-2.5">
             <BrandMark className="size-5 text-indigo-400" />
-            <span>RepoMind</span>
+            <span>RepoLexicon</span>
           </div>
-          <p>See the bigger picture of any codebase.</p>
+          <p>The lexicon of your codebase.</p>
         </div>
       </footer>
     </div>

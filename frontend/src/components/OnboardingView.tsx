@@ -54,7 +54,7 @@ export default function OnboardingView({
           <BrandMark className="size-7 text-indigo-400" />
           <span className="text-lg font-semibold tracking-tight">
             <span className="text-white">Repo</span>
-            <span className="text-indigo-400">Mind</span>
+            <span className="text-indigo-400">Lexicon</span>
           </span>
         </div>
 
@@ -92,7 +92,7 @@ export default function OnboardingView({
             Import a repository
           </h1>
           <p className="mx-auto mt-4 max-w-lg text-base text-white/60">
-            Paste a GitHub URL and RepoMind will chart its architecture while it
+            Paste a GitHub URL and RepoLexicon will chart its architecture while it
             indexes. Chat unlocks as soon as the index is ready.
           </p>
 

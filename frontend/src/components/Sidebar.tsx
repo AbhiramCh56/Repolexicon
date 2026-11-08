@@ -61,7 +61,7 @@ export default function Sidebar({
         </div>
         <div className="min-w-0">
           <h2 className="truncate font-heading text-base font-semibold leading-tight">
-            RepoMind AI
+            RepoLexicon
           </h2>
           <p className="truncate text-xs text-muted-foreground">
             {userProfile?.email}

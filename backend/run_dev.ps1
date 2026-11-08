@@ -1,4 +1,4 @@
-# Dev launcher for the RepoMind backend. Run it instead of a bare `uvicorn` call:
+# Dev launcher for the RepoLexicon backend. Run it instead of a bare `uvicorn` call:
 #   .\backend\run_dev.ps1
 #
 # --reload-dir app is load-bearing, not cosmetic.
