@@ -4,6 +4,7 @@ import { MessageSquareIcon, SendIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import MarkdownMessage from "@/components/MarkdownMessage"
 
 type ChatMessage = { role: string; text: string }
 
@@ -81,13 +82,19 @@ export default function ChatInterface({
                   className={`flex ${isUser ? "justify-end" : "justify-start"}`}
                 >
                   <div
-                    className={`max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-xs ${
+                    className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-xs ${
                       isUser
-                        ? "rounded-br-sm bg-primary text-primary-foreground"
+                        ? "whitespace-pre-wrap rounded-br-sm bg-primary text-primary-foreground"
                         : "rounded-bl-sm border bg-card text-card-foreground"
                     }`}
                   >
-                    {isPendingAssistant ? <TypingDots /> : msg.text}
+                    {isPendingAssistant ? (
+                      <TypingDots />
+                    ) : isUser ? (
+                      msg.text
+                    ) : (
+                      <MarkdownMessage content={msg.text} />
+                    )}
                   </div>
                 </div>
               )
