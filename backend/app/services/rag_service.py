@@ -5,7 +5,12 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_groq import ChatGroq
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
-from app.ai.manifest_routing import is_architecture_question, load_manifest_context
+from app.ai.manifest_routing import (
+    is_architecture_question,
+    is_call_question,
+    load_callgraph_context,
+    load_manifest_context,
+)
 from app.core.config import settings
 from app.models.chat import ChatMessage
 from app.services.embedding_service import (
@@ -23,6 +28,14 @@ MANIFEST_CONTEXT_HEADER = (
     "questions about repository layout, languages, entrypoints and module "
     "boundaries. It covers files that are deliberately not in the vector index, "
     "such as documentation and configuration."
+)
+
+CALLGRAPH_CONTEXT_HEADER = (
+    "Call graph (deterministic, from stored call sites). Each entry records "
+    "who calls whom and at which file:line. The bracketed label records how "
+    "the target was found — same_file, import, unique — or that it is "
+    "unresolved (standard library, third-party or dynamic dispatch); treat "
+    "unresolved entries as call sites whose target could not be verified."
 )
 
 _llm = None
@@ -114,14 +127,25 @@ def get_retriever(repo_id: str):
 
 def _collect_context(db, repo_id, question: str, retriever) -> str:
   """
-  Assemble prompt context from vector retrieval, plus the manifest when the
-  question is about repository shape.
+  Assemble prompt context from vector retrieval, plus the manifest and/or call
+  graph when the question is about repository shape or call relations.
 
-  Manifest context is prepended rather than substituted: routing only adds
-  information, so a partially architectural question still gets its code.
+  Manifest and call-graph context are prepended rather than substituted:
+  routing only adds information, so a mixed question still gets its code.
   """
   relevant_docs = retriever.invoke(question)
   context_parts = [doc.page_content for doc in relevant_docs]
+
+  # repo_id is optional in the chat API; a session without one has no rows to
+  # route to, so only routed questions pay for the lookups.
+  if repo_id and is_call_question(question):
+      call_context = load_callgraph_context(db, repo_id, question)
+      if call_context:
+          logger.info(
+              "Call question: injecting call graph context (%d chars)",
+              len(call_context),
+          )
+          context_parts.insert(0, f"{CALLGRAPH_CONTEXT_HEADER}\n\n{call_context}")
 
   if is_architecture_question(question):
       manifest_context = load_manifest_context(db, repo_id)

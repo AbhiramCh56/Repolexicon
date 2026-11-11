@@ -7,10 +7,14 @@ from fastapi.responses import PlainTextResponse
 
 from app.db.session import get_db
 from app.models.user import User
+from app.models.call_edge import CallEdge
 from app.models.file import File
 from app.models.repository import Repository, RepoStatus
 from app.models.repo_manifest import RepoManifest
 from app.schemas.repository import (
+    CallGraphResponse,
+    CallGraphSummaryResponse,
+    CallEdgeOut,
     DiagramProgress,
     DiagramsResponse,
     RepositoryCreate,
@@ -30,6 +34,7 @@ from app.services.github_service import (
     extract_repo_info,
     process_repository_background_task,
 )
+from app.services.call_graph_service import RESOLUTION_UNRESOLVED
 
 router = APIRouter()
 
@@ -268,6 +273,127 @@ def get_repository_diagrams(
             live_files=row.file_count,
             total_files=row.file_count,
         ),
+    )
+
+
+@router.get("/{repo_id}/callgraph", response_model=CallGraphResponse)
+def get_repository_call_graph(
+    repo_id: str,
+    symbol: str,
+    direction: str = "callees",
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Return the callers or callees of one symbol, one row per call site.
+
+    ``direction=callees`` answers "what does ``symbol`` call" (edges whose
+    caller is ``symbol``); ``direction=callers`` answers "who calls
+    ``symbol``" (edges whose callee name is ``symbol``). Unresolved edges are
+    included and labelled rather than hidden, so a call that could not be
+    placed (stdlib, third-party, dynamic dispatch) is visible in the answer.
+    """
+    repo = _get_owned_repository(repo_id, db, current_user)
+
+    # is_complete rather than has_embeddings: a partial index would produce a
+    # misleading graph, and the graph is rebuilt at the end of every import.
+    if not repo.is_complete:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Repository is still being indexed. The call graph is only "
+                "available once indexing has completed."
+            ),
+        )
+
+    if direction not in ("callers", "callees"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="direction must be 'callers' or 'callees'",
+        )
+
+    limit = max(1, min(limit, 500))
+
+    query = db.query(CallEdge).filter(CallEdge.repository_id == repo.id)
+    if direction == "callers":
+        # callee_symbol stores the bare name even when unresolved, so a
+        # callers lookup still finds unplaced call sites by name.
+        query = query.filter(CallEdge.callee_symbol == symbol)
+    else:
+        query = query.filter(CallEdge.caller_symbol == symbol)
+
+    rows = query.order_by(CallEdge.caller_path, CallEdge.call_line).all()
+    return CallGraphResponse(
+        repository_id=repo.id,
+        full_name=repo.full_name,
+        symbol=symbol,
+        direction=direction,
+        total=len(rows),
+        edges=[
+            CallEdgeOut(
+                caller_symbol=row.caller_symbol,
+                caller_path=row.caller_path,
+                callee_symbol=row.callee_symbol,
+                callee_path=row.callee_path,
+                call_line=row.call_line,
+                resolution=row.resolution,
+            )
+            for row in rows[:limit]
+        ],
+    )
+
+
+@router.get("/{repo_id}/callgraph/summary", response_model=CallGraphSummaryResponse)
+def get_repository_call_graph_summary(
+    repo_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Honest counts for a repository's stored call graph.
+
+    ``by_resolution`` includes ``unresolved``, so a sparse or noisy graph is
+    never mistaken for a dense, verified one; ``top_callees`` are the most
+    called symbols project-wide.
+    """
+    repo = _get_owned_repository(repo_id, db, current_user)
+
+    if not repo.is_complete:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Repository is still being indexed. The call graph is only "
+                "available once indexing has completed."
+            ),
+        )
+
+    resolution_rows = (
+        db.query(CallEdge.resolution, func.count(CallEdge.id))
+        .filter(CallEdge.repository_id == repo.id)
+        .group_by(CallEdge.resolution)
+        .all()
+    )
+    by_resolution = {resolution: count for resolution, count in resolution_rows}
+    total = sum(by_resolution.values())
+    resolved = total - by_resolution.get(RESOLUTION_UNRESOLVED, 0)
+
+    callee_rows = (
+        db.query(CallEdge.callee_symbol, func.count(CallEdge.id))
+        .filter(CallEdge.repository_id == repo.id)
+        .group_by(CallEdge.callee_symbol)
+        .order_by(func.count(CallEdge.id).desc(), CallEdge.callee_symbol.asc())
+        .limit(10)
+        .all()
+    )
+
+    return CallGraphSummaryResponse(
+        repository_id=repo.id,
+        full_name=repo.full_name,
+        call_sites=total,
+        resolved=resolved,
+        by_resolution=by_resolution,
+        top_callees=[{"symbol": name, "count": count} for name, count in callee_rows],
     )
 
 

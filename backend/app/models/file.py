@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Integer, ForeignKey, DateTime
+from sqlalchemy import Column, String, Integer, ForeignKey, DateTime, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -23,6 +23,11 @@ class File(Base):
     
     # We will use this later for deduplication and update tracking
     checksum = Column(String, nullable=True) 
+
+    # Raw import statements extracted during parsing (e.g.
+    # "from app.services import file_filter"). Consumed by the call-graph
+    # resolver to scope a called name to the file that defines it.
+    imports_json = Column(JSON, nullable=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 

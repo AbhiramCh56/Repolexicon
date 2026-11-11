@@ -27,6 +27,11 @@ class FakeQuery:
     def group_by(self, *args, **kwargs):
         return self
 
+    def limit(self, n):
+        # Kept faithful: a real query returns at most n rows.
+        self._limit = n
+        return self
+
     def order_by(self, *args, **kwargs):
         return self
 
@@ -40,6 +45,9 @@ class FakeQuery:
         return self.result
 
     def all(self):
+        limit = getattr(self, "_limit", None)
+        if limit is not None:
+            return self.rows[:limit]
         return self.rows
 
 

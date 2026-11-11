@@ -47,6 +47,9 @@ class LanguageSpec:
     #: Container node types that are a namespace/scope rather than a class.
     namespace_nodes: Tuple[str, ...] = ()
     import_nodes: Tuple[str, ...] = ()
+    #: Node types that represent a function/method call. The callee text
+    #: (``foo`` or ``obj.method``) is captured for the call-graph resolver.
+    call_nodes: Tuple[str, ...] = ()
     extensions: Tuple[str, ...] = ()
 
     def kind_for(self, node_type: str) -> Optional[str]:
@@ -68,6 +71,9 @@ _REGISTRY: Tuple[LanguageSpec, ...] = (
         function_nodes=("function_definition",),
         namespace_nodes=(),
         import_nodes=("import_statement", "import_from_statement"),
+        # Python normally goes through the stdlib-ast fast path, which extracts
+        # calls itself; this entry keeps the registry honest for direct use.
+        call_nodes=("call",),
         extensions=(".py", ".pyi"),
     ),
     LanguageSpec(
@@ -83,6 +89,7 @@ _REGISTRY: Tuple[LanguageSpec, ...] = (
         ),
         container_nodes=("lexical_declaration", "variable_declaration"),
         import_nodes=("import_statement",),
+        call_nodes=("call_expression",),
         extensions=(".js", ".jsx", ".mjs", ".cjs"),
     ),
     LanguageSpec(
@@ -103,6 +110,7 @@ _REGISTRY: Tuple[LanguageSpec, ...] = (
         ),
         container_nodes=("lexical_declaration", "variable_declaration", "type_alias_declaration"),
         import_nodes=("import_statement", "import_alias"),
+        call_nodes=("call_expression",),
         extensions=(".ts", ".mts", ".cts"),
     ),
     LanguageSpec(
@@ -123,6 +131,7 @@ _REGISTRY: Tuple[LanguageSpec, ...] = (
         ),
         container_nodes=("lexical_declaration", "variable_declaration", "type_alias_declaration"),
         import_nodes=("import_statement", "import_alias"),
+        call_nodes=("call_expression",),
         extensions=(".tsx",),
     ),
     LanguageSpec(
@@ -133,6 +142,7 @@ _REGISTRY: Tuple[LanguageSpec, ...] = (
         function_nodes=("function_declaration", "method_declaration"),
         container_nodes=("type_spec",),
         import_nodes=("import_declaration", "import_spec"),
+        call_nodes=("call_expression",),
         extensions=(".go",),
     ),
     LanguageSpec(
@@ -144,6 +154,7 @@ _REGISTRY: Tuple[LanguageSpec, ...] = (
         container_nodes=("impl_item", "mod_item"),
         namespace_nodes=("mod_item",),
         import_nodes=("use_declaration", "extern_crate_declaration"),
+        call_nodes=("call_expression",),
         extensions=(".rs",),
     ),
     LanguageSpec(
@@ -159,6 +170,9 @@ _REGISTRY: Tuple[LanguageSpec, ...] = (
         ),
         function_nodes=("method_declaration", "constructor_declaration"),
         import_nodes=("import_declaration",),
+        # Java's call node reports only the bare method name; the receiver
+        # expression is not part of the ``name`` field.
+        call_nodes=("method_invocation",),
         extensions=(".java",),
     ),
     LanguageSpec(
@@ -168,6 +182,7 @@ _REGISTRY: Tuple[LanguageSpec, ...] = (
         class_nodes=("struct_specifier", "union_specifier", "enum_specifier", "type_definition"),
         function_nodes=("function_definition",),
         import_nodes=("preproc_include",),
+        call_nodes=("call_expression",),
         extensions=(".c", ".h"),
     ),
     LanguageSpec(
@@ -183,6 +198,7 @@ _REGISTRY: Tuple[LanguageSpec, ...] = (
         ),
         function_nodes=("function_definition", "template_declaration"),
         import_nodes=("preproc_include",),
+        call_nodes=("call_expression",),
         extensions=(".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".ipp"),
     ),
     LanguageSpec(
@@ -193,6 +209,7 @@ _REGISTRY: Tuple[LanguageSpec, ...] = (
         function_nodes=("method", "singleton_method"),
         namespace_nodes=("module",),
         import_nodes=(),
+        call_nodes=("call",),
         extensions=(".rb", ".rake"),
     ),
     LanguageSpec(
@@ -202,6 +219,7 @@ _REGISTRY: Tuple[LanguageSpec, ...] = (
         class_nodes=("class_declaration", "interface_declaration", "trait_declaration", "enum_declaration"),
         function_nodes=("function_definition", "method_declaration"),
         import_nodes=("namespace_use_declaration",),
+        call_nodes=("function_call_expression", "member_call_expression"),
         extensions=(".php", ".phtml"),
     ),
 )
@@ -463,6 +481,7 @@ def parse_symbols(source_code: str, extension: str) -> ParsedFile:
     lines = source_code.splitlines()
     blocks: List[Dict[str, Any]] = []
     imports: List[str] = []
+    calls: List[Tuple[str, int]] = []
 
     def visit(node) -> None:
         kind = spec.kind_for(node.type)
@@ -483,10 +502,15 @@ def parse_symbols(source_code: str, extension: str) -> ParsedFile:
             text = node.text.decode("utf-8", errors="ignore").strip()
             if text:
                 imports.append(text)
+        elif node.type in spec.call_nodes:
+            callee = _callee_text(node)
+            if callee:
+                calls.append((callee, node.start_point[0] + 1))
         for child in node.named_children:
             visit(child)
 
     visit(root)
+    _attach_calls_to_blocks(blocks, calls)
 
     return ParsedFile(
         state=PARSE_STATE_STRUCTURAL,
@@ -494,6 +518,76 @@ def parse_symbols(source_code: str, extension: str) -> ParsedFile:
         blocks=blocks,
         imports=imports,
     )
+
+
+#: Cap on call sites recorded per symbol. A pathological generated file can
+#: contain thousands of calls in one function; the cap keeps its chunk metadata
+#: bounded. Calls beyond the cap are dropped, not truncated mid-list.
+MAX_CALLS_PER_SYMBOL = 500
+
+#: A callee text longer than this is almost certainly a generated expression,
+#: not something a reader would trace, so it is not recorded.
+MAX_CALLEE_TEXT_CHARS = 200
+
+
+def _callee_text(node) -> Optional[str]:
+    """
+    The callee of a call node, as text (``foo`` or ``obj.method``).
+
+    Grammars differ on which field carries the callee: the C-family puts it in
+    ``function``, Java in ``name`` and Ruby in ``method``. The full text is
+    kept (including the receiver) because that qualifier is what the
+    call-graph resolver uses to find the defining file.
+    """
+    for field_name in ("function", "name", "method"):
+        part = node.child_by_field_name(field_name)
+        if part is not None:
+            text = part.text.decode("utf-8", errors="ignore").strip()
+            if text and len(text) <= MAX_CALLEE_TEXT_CHARS:
+                return text
+    return None
+
+
+def _attach_calls_to_blocks(
+    blocks: List[Dict[str, Any]], calls: List[Tuple[str, int]]
+) -> None:
+    """
+    Attach call sites to the innermost block whose line range contains them.
+
+    Line-range attribution is what keeps a call inside a nested function with
+    that function's chunk instead of the outer one. A call outside any block
+    (module-level code) is dropped: the call graph is function-to-function, and
+    inventing a "module" caller would be a guess, not a fact.
+    """
+    if not calls or not blocks:
+        return
+
+    for callee, line in calls:
+        best = None
+        best_span = -1
+        for block in blocks:
+            start = block.get("start_line") or 0
+            end = block.get("end_line") or 0
+            if start <= line <= end:
+                span = end - start
+                # Innermost block wins: smallest range, then latest start.
+                if best is None or span < best_span or (
+                    span == best_span and start > (best.get("start_line") or 0)
+                ):
+                    best = block
+                    best_span = span
+        if best is None:
+            continue
+
+        # NB: an existing ``metadata_json`` is an empty dict at this point,
+        # which is falsy — ``setdefault(...) or {}`` would hand back a
+        # throwaway dict and silently drop every recorded call.
+        metadata = best.setdefault("metadata_json", {})
+        if metadata is None:
+            metadata = best["metadata_json"] = {}
+        recorded = metadata.setdefault("calls", [])
+        if len(recorded) < MAX_CALLS_PER_SYMBOL:
+            recorded.append({"callee": callee, "line": line})
 
 
 def _qualified(spec: LanguageSpec, node, kind: str) -> str:
@@ -507,14 +601,26 @@ def _qualified(spec: LanguageSpec, node, kind: str) -> str:
 def _parse_python(source_code: str, spec: LanguageSpec) -> ParsedFile:
     """Use the existing stdlib ``ast`` parser as the Python fast path."""
     try:
-        blocks = PythonCodeParser(source_code).parse()
+        python_parser = PythonCodeParser(source_code)
+        blocks = python_parser.parse()
+        calls = python_parser.extract_calls()
+        imports = python_parser.extract_imports()
     except Exception:
         return ParsedFile(state=PARSE_STATE_UNPARSEABLE, language=spec.name)
 
     if blocks and all(block.get("chunk_type") == "raw" for block in blocks):
         return ParsedFile(state=PARSE_STATE_UNPARSEABLE, language=spec.name)
 
+    _attach_calls_to_blocks(blocks, calls)
+
     for block in blocks:
-        metadata = block.setdefault("metadata_json", {}) or {}
+        metadata = block.setdefault("metadata_json", {})
+        if metadata is None:
+            metadata = block["metadata_json"] = {}
         metadata.setdefault("qualified_name", block.get("name") or "anonymous")
-    return ParsedFile(state=PARSE_STATE_STRUCTURAL, language=spec.name, blocks=blocks)
+    return ParsedFile(
+        state=PARSE_STATE_STRUCTURAL,
+        language=spec.name,
+        blocks=blocks,
+        imports=imports,
+    )

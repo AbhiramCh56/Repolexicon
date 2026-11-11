@@ -229,7 +229,10 @@ def process_repository_files(repo_id: str, db: Session) -> FileProcessResult:
                         extension=extension,
                         language=parsed.language,
                         parse_state=parsed.state,
-                        size_bytes=size
+                        size_bytes=size,
+                        # The resolver reads these to scope called names to the
+                        # file that defines them (see call_graph_service).
+                        imports_json=parsed.imports or None,
                     )
                     db.add(new_file)
                     db.flush()

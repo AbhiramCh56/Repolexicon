@@ -33,8 +33,9 @@ Paste a repository URL, and RepoLexicon shallow-clones it, parses the source, in
 
 - **Import any public GitHub repository** — submit a URL and indexing runs in the background with live status and progress.
 - **Deterministic architecture manifest** — languages, directories, entrypoints, symbol index, and documentation inventory built from the parsed tree. No LLM involved, so the output is stable and reproducible.
+- **Function-level call graph** — every call site is recorded with its caller, callee, file, and line, then resolved from the stored index: same file, via imports, or unique project-wide. Each edge carries a resolution label, and calls that cannot be placed (stdlib, third-party, dynamic dispatch) are kept and labelled `unresolved` rather than guessed.
 - **Architecture views** — language breakdown, directory graph, and entrypoint map, rendered as structured SVG graphs (with Mermaid source available for export).
-- **Grounded code chat** — retrieval over indexed source chunks, plus manifest context automatically injected for architecture questions. Streaming responses are supported.
+- **Grounded code chat** — retrieval over indexed source chunks, plus manifest context automatically injected for architecture questions and call-graph context for "who calls X?" questions. Streaming responses are supported.
 - **Manifest-only repositories** — docs- and config-only repositories produce zero code chunks but still get a complete manifest, so they remain queryable instead of being rejected.
 - **Honest parse states** — a file is reported as structurally parsed only when its grammar was available and parsing succeeded; otherwise it is chunked as raw text and labelled accordingly.
 - **Practical file filtering** — respects `.gitignore` and skips lockfiles, build output, binaries, minified assets, and oversized files.
@@ -82,12 +83,12 @@ The backend does the heavy lifting. The frontend is a single-page app that talks
 │   ├── app/
 │   │   ├── ai/            # manifest construction, diagrams, question routing
 │   │   ├── api/v1/        # auth, repositories, chat routes
-│   │   ├── cli/           # manifest backfill CLI
+│   │   ├── cli/           # backfill CLIs (manifests, call graphs)
 │   │   ├── core/          # settings, security, rate limiting
 │   │   ├── db/            # SQLAlchemy engine and session
-│   │   ├── models/        # users, repositories, files, chunks, chat, manifests
+│   │   ├── models/        # users, repositories, files, chunks, chat, manifests, call edges
 │   │   ├── schemas/       # Pydantic request/response models
-│   │   └── services/      # clone, filter, parse, embed, RAG, manifests
+│   │   └── services/      # clone, filter, parse, embed, RAG, manifests, call graph
 │   ├── alembic/           # database migrations
 │   ├── tests/             # unittest suite (no database or network required)
 │   ├── alembic.ini
@@ -320,7 +321,8 @@ All backend settings live in `backend/.env` and are read by `backend/app/core/co
 4. **Parse** — tree-sitter extracts classes, functions, modules, and imports where a grammar is available. Unsupported or unparseable files fall back to raw text chunking.
 5. **Chunk and embed** — source is split into character-bounded chunks and embedded in batches into a per-repository Chroma collection.
 6. **Summarize** — a deterministic manifest is built from the stored file and chunk rows, persisted to PostgreSQL, and rendered to Markdown.
-7. **Explore** — diagrams are derived from the manifest; chat retrieves the top matching chunks and, for architecture questions, prepends manifest context.
+7. **Resolve calls** — the recorded call sites are resolved into a function-level call graph from the same rows (same file, imports, or a unique project-wide symbol), with every edge labelled by how it was resolved and unresolvable calls kept as `unresolved`.
+8. **Explore** — diagrams are derived from the manifest; chat retrieves the top matching chunks and, for architecture questions, prepends manifest context; call-graph questions ("who calls X?") additionally get the stored call edges for the symbols named in the question.
 
 Repository status moves through `pending → cloning → processing → embedding → completed` (or `failed` with an error message).
 
@@ -381,6 +383,8 @@ All routes are prefixed with `/api/v1` except the health check. Protected routes
 | `GET` | `/repos/{repo_id}` | Repository status and progress |
 | `GET` | `/repos/{repo_id}/structure` | Full manifest payload and Markdown |
 | `GET` | `/repos/{repo_id}/structure.md` | Manifest as Markdown (`text/markdown`) |
+| `GET` | `/repos/{repo_id}/callgraph?symbol=X&direction=callers\|callees` | Callers or callees of one symbol, one row per call site |
+| `GET` | `/repos/{repo_id}/callgraph/summary` | Call-site counts by resolution label and top callees |
 | `GET` | `/repos/{repo_id}/diagrams` | Mermaid source plus structured graphs |
 | `POST` | `/repos/{repo_id}/reprocess` | Re-clone and re-index |
 | `DELETE` | `/repos/{repo_id}` | Delete the repository, clone, and vector index |
@@ -402,22 +406,26 @@ Interactive documentation is available at `/docs` (Swagger UI) and `/redoc`.
 
 | Store | Contents |
 |---|---|
-| **PostgreSQL** | `users`, `repositories`, `files`, `chunks`, `chat_sessions`, `chat_messages`, `repo_manifests` |
+| **PostgreSQL** | `users`, `repositories`, `files`, `chunks`, `chat_sessions`, `chat_messages`, `repo_manifests`, `call_edges` |
 | `backend/.data/chroma` | One Chroma collection per repository |
 | `backend/.data/repos` | Shallow clones of imported repositories |
 | `backend/.data/manifests` | Rendered manifest files |
 
 Deleting a repository removes its clone and vector collection; database rows are removed by cascade. The `.data` directory is git-ignored and should be backed by a persistent volume in production.
 
-### Backfilling manifests
+### Backfilling manifests and call graphs
 
-Existing repositories can be given manifests without re-cloning or re-embedding:
+Existing repositories can be given manifests and call graphs without re-cloning or re-embedding:
 
 ```bash
 cd backend
 python -m app.cli.backfill_manifests
 python -m app.cli.backfill_manifests --repo owner/name
+python -m app.cli.backfill_call_graphs
+python -m app.cli.backfill_call_graphs --repo owner/name
 ```
+
+Repositories indexed before call sites were recorded produce an empty graph (kept honest rather than guessed); reprocess such a repository to populate it.
 
 ---
 
@@ -458,7 +466,7 @@ cd backend
 python -m unittest discover -s tests -v
 ```
 
-The suite covers parsing, filtering, manifests, diagrams, chat gating, rate limiting, API guards, and embedding behavior. It uses fakes and does not require a database, network access, or API keys. `backend/.env` must exist because the config tests resolve it.
+The suite covers parsing, filtering, manifests, call graphs, diagrams, chat gating, rate limiting, API guards, and embedding behavior. It uses fakes and does not require a database, network access, or API keys. `backend/.env` must exist because the config tests resolve it.
 
 ### Frontend
 

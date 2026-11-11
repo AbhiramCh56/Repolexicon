@@ -67,6 +67,48 @@ class DiagramProgress(BaseModel):
     total_files: int = 0
 
 
+class CallEdgeOut(BaseModel):
+    """
+    One resolved call site.
+
+    ``resolution`` records how the target was found, so an edge is never
+    mistaken for a verified link: ``same_file`` (defined in the caller's own
+    file), ``import`` (the caller's imports pointed at the defining file),
+    ``unique`` (exactly one project-wide symbol with that name) or
+    ``unresolved`` (stdlib, third-party or dynamic dispatch; the call site is
+    kept and labelled rather than guessed).
+    """
+
+    caller_symbol: str
+    caller_path: str
+    callee_symbol: str
+    callee_path: str | None = None
+    call_line: int
+    resolution: str
+
+
+class CallGraphResponse(BaseModel):
+    """Callers or callees of one symbol, one row per call site."""
+
+    repository_id: UUID4
+    full_name: str
+    symbol: str
+    direction: str
+    total: int
+    edges: list[CallEdgeOut]
+
+
+class CallGraphSummaryResponse(BaseModel):
+    """Honest counts for a repository's call graph, including unresolved."""
+
+    repository_id: UUID4
+    full_name: str
+    call_sites: int
+    resolved: int
+    by_resolution: dict[str, int]
+    top_callees: list[dict]
+
+
 class DiagramsResponse(BaseModel):
     """
     Architecture diagrams for a repository, as Mermaid source.

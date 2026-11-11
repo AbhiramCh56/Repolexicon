@@ -15,6 +15,7 @@ from app.services.embedding_service import (
 )
 from app.services.repo_processor import process_repository_files
 from app.services.manifest_service import build_and_persist_manifest
+from app.services.call_graph_service import build_and_persist_call_graph
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,20 @@ def process_repository_background_task(repo_id: str, db: Session):
             )
         except Exception:
             logger.exception("Manifest generation failed for %s", full_name)
+            db.rollback()
+
+        # 8. Build the deterministic call graph from the same rows. Like the
+        #    manifest, it is reproducible for a given index and non-fatal on
+        #    failure: chat answers fall back to plain retrieval without it.
+        try:
+            call_graph_result = build_and_persist_call_graph(db, repo)
+            logger.info(
+                "%s: call graph built, %s",
+                full_name,
+                call_graph_result.summary(),
+            )
+        except Exception:
+            logger.exception("Call graph generation failed for %s", full_name)
             db.rollback()
 
     except Exception:
